@@ -78,6 +78,9 @@ class GitHubStatus(StatusReceiverMultiService):
 
         self._github = GitHubAPI(oauth2_token=token, baseURL=baseURL)
 
+	# Uncomment extra debug if needed
+        #log.msg("GitHubStatus: created with token: " + str(token))
+
         self._status = None
 
     def startService(self):
@@ -168,7 +171,7 @@ class GitHubStatus(StatusReceiverMultiService):
         """
         Return a dictionary with GitHub related properties from `build`.
         """
-        repoOwner, repoName, sha, context = yield defer.gatherResults([
+        repoOwner, repoName, sha, context = yield defer.gatherResults([																										
             build.render(self._repoOwner),
             build.render(self._repoName),
             build.render(self._sha),
@@ -177,6 +180,11 @@ class GitHubStatus(StatusReceiverMultiService):
 
         if not repoOwner or not repoName:
             defer.returnValue({})
+
+	# Try to find sha in "src::got_revision" first!
+	if not sha:
+            sha = yield build.render(Interpolate("%(src::got_revision)s"))
+            #log.msg("GitHubStatus: SHA revision: " + str(sha))
 
         if not sha:
             log.msg('GitHubStatus: No revision found.')
@@ -196,6 +204,8 @@ class GitHubStatus(StatusReceiverMultiService):
         """
         Send status to GitHub API.
         """
+        # Uncomment extra debug if needed 
+        # log.msg("GitHubStatus: Setting Status for Builder " + status['builderName'] )
 
         d = self._github.repos.createStatus(
             repo_user=status['repoOwner'].encode('utf-8'),
@@ -205,6 +215,7 @@ class GitHubStatus(StatusReceiverMultiService):
             target_url=status['targetURL'].encode('utf-8'),
             description=status['description'].encode('utf-8'),
             context=status['context'].encode('utf-8'),
+#	    context=status['builderName'].encode('utf-8'),
         )
 
         success_message = (
@@ -215,6 +226,33 @@ class GitHubStatus(StatusReceiverMultiService):
             'Fail to send status "%(state)s" for '
             '%(repoOwner)s/%(repoName)s at %(sha)s.'
         ) % status
-        d.addCallback(lambda result: log.msg(success_message))
-        d.addErrback(lambda failure: log.err(failure, error_message))
-        return d
+#        d.addCallback(lambda result: log.msg(success_message))
+#        d.addErrback(lambda failure: log.err(failure, error_message))
+        d.addCallback(self._githubStatusCallback)
+        d.addErrback(self._githubStatusError)
+	return d
+
+    # Extended giuthubgithub Status handling 
+    def _githubStatusCallback(self, status):
+        success_message = (
+            'Status "%(state)s" sent for '
+            '%(context)s at %(target_url)s.'
+        ) % status
+        log.msg(success_message)
+
+        #Write Into Success Logfile
+        with open(status['context']+'.log','a+') as logFile:
+            logFile.write(status['description'] + ";" + status['target_url'] + ";" + status['state'] + ";" + status['url'] + "\n")
+
+
+    def _githubStatusError(self, status):
+        error_message = (
+            'Fail to send status "%(state)s" for '
+            '%(context)s at %(target_url)s.'
+        ) % status
+        log.err(self, error_message)
+
+        #Write Into Error Logfile
+        with open(status['context']+'.err','a+') as logFile:
+            logFile.write(status['description'] + ";" + status['target_url'] + ";" + status['state'] + ";" + status['url'] + "\n")
+	# ---
